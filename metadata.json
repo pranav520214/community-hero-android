@@ -1,0 +1,6 @@
+{
+  "name": "CivicDex",
+  "description": "An AI-powered hyperlocal community platform that enables citizens to report, verify, track, and resolve local infrastructure issues.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

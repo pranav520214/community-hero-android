@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: Check if document is owned by current user
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Helper: Fetch user's role from Firestore profile
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      // Profiles are publicly readable for community awareness
+      allow read: if isAuthenticated();
+      // Only the user themselves can register or edit their profile details
+      allow create, update: if isOwner(userId);
+      allow delete: if false; // Profiles shouldn't be deleted without authorization
+    }
+
+    // --- Issues Collection ---
+    match /issues/{issueId} {
+      // Issues are readable by all authenticated neighbors
+      allow read: if isAuthenticated();
+      // Any citizen, contributor, worker, or officer can report an issue
+      allow create: if isAuthenticated();
+      // Upvotes, verification increments, and resolutions can only be made by authorized users
+      allow update: if isAuthenticated() && (
+        // Allow upvotes/verifications count adjustments
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['upvotesCount', 'verificationsCount', 'status']) ||
+        // Workers, Officers and Administrators can update statuses and resolution notes
+        getUserRole() == 'WORKER' || getUserRole() == 'OFFICER' || getUserRole() == 'ADMINISTRATOR'
+      );
+      allow delete: if getUserRole() == 'OFFICER' || getUserRole() == 'ADMINISTRATOR'; // Officers and Admins can delete reports
+    }
+
+    // --- Verifications Collection ---
+    match /verifications/{verificationId} {
+      allow read: if isAuthenticated();
+      // Citizens and Contributors can write verification votes
+      allow create: if isAuthenticated() && request.resource.data.verifierId == request.auth.uid;
+      allow update, delete: if false; // Verification history is immutable
+    }
+
+    // --- Notifications Collection ---
+    match /notifications/{notificationId} {
+      // Only the recipient of the notification can read or modify it
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated(); // Allowed for triggering notifications in community transactions
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
