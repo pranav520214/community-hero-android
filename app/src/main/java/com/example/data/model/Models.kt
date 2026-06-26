@@ -132,34 +132,158 @@ data class HyperlocalSupportInfo(
     val officerName: String,
     val officerPhone: String,
     val officerEmail: String,
-    val officeAddress: String
+    val officeAddress: String,
+    val workingHours: String = "9:00 AM - 5:00 PM (Mon-Fri)"
 )
 
 fun getHyperlocalSupport(latitude: Double, longitude: Double): HyperlocalSupportInfo {
     return when {
-        longitude < -72.930 -> HyperlocalSupportInfo(
-            division = "Division A (West Haven)",
-            ward = "Ward 12",
+        longitude < -122.430 -> HyperlocalSupportInfo(
+            division = "Jalandhar West Division",
+            ward = "Ward 12 Updates",
             officerName = "Officer James Vance",
-            officerPhone = "+1 (203) 946-6201",
-            officerEmail = "jvance@newhaven.gov",
-            officeAddress = "200 Orange St, West Haven, CT"
+            officerPhone = "+91 (987) 654-3210",
+            officerEmail = "jvance@civicdex.gov.in",
+            officeAddress = "West Division Office, Sector 4, Jalandhar",
+            workingHours = "8:30 AM - 4:30 PM (Mon-Sat)"
         )
-        longitude > -72.915 -> HyperlocalSupportInfo(
-            division = "Division C (East Rock / Fair Haven)",
-            ward = "Ward 4",
+        longitude > -122.410 -> HyperlocalSupportInfo(
+            division = "Jalandhar East Division",
+            ward = "Sector 7 Community",
             officerName = "Officer Sarah Jenkins",
-            officerPhone = "+1 (203) 946-8152",
-            officerEmail = "sjenkins@newhaven.gov",
-            officeAddress = "12 Fair Haven Rd, New Haven, CT"
+            officerPhone = "+91 (987) 654-3211",
+            officerEmail = "sjenkins@civicdex.gov.in",
+            officeAddress = "East Division Office, Cantt Road, Jalandhar",
+            workingHours = "9:00 AM - 5:00 PM (Mon-Fri)"
         )
         else -> HyperlocalSupportInfo(
-            division = "Division B (Downtown Central)",
-            ward = "Ward 7",
+            division = "Jalandhar North Division",
+            ward = "Ward 4 (Downtown Core)",
             officerName = "Director Marcus Vance",
-            officerPhone = "+1 (203) 946-3000",
-            officerEmail = "mvance@newhaven.gov",
-            officeAddress = "165 Church Street, New Haven, CT"
+            officerPhone = "+91 (987) 654-3000",
+            officerEmail = "mvance@civicdex.gov.in",
+            officeAddress = "Municipal HQ, Court Road, Jalandhar North",
+            workingHours = "9:00 AM - 5:30 PM (Mon-Fri)"
         )
     }
 }
+
+data class CivicTeam(
+    val id: String,
+    val name: String,
+    val division: String,
+    val leadWorkerId: String,
+    val members: List<String>,
+    val specialties: List<String>,
+    val status: String,
+    val activeAssignmentId: String? = null
+)
+
+data class TeamAssignment(
+    val id: String,
+    val issueId: String,
+    val teamId: String,
+    val assignedBy: String,
+    val status: String, // "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "AWAITING_VERIFICATION", "COMPLETED", "CLOSED"
+    val assignedAt: Long,
+    val estimatedCompletionTime: Long,
+    val workerConfirmations: Map<String, Boolean> = emptyMap()
+)
+
+data class WorkerAvailability(
+    val id: String,
+    val name: String,
+    val trade: String,
+    val isAvailable: Boolean,
+    val currentWorkloadCount: Int,
+    val latitude: Double,
+    val longitude: Double,
+    val division: String
+)
+
+data class CommunityGroup(
+    val id: String,
+    val name: String,
+    val description: String,
+    val category: String, // "NEIGHBORHOOD", "VOLUNTEER", "STREET", "WELFARE", "ENVIRONMENTAL"
+    val division: String,
+    val creatorId: String,
+    val moderators: List<String> = emptyList(),
+    val isPublic: Boolean = true,
+    val inviteCode: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class GroupMember(
+    val id: String,
+    val groupId: String,
+    val userId: String,
+    val role: String, // "OWNER", "MODERATOR", "MEMBER"
+    val status: String, // "PENDING", "APPROVED", "BLOCKED"
+    val joinedAt: Long = System.currentTimeMillis()
+)
+
+data class CivicMessage(
+    val id: String,
+    val channelOrGroupId: String,
+    val senderId: String,
+    val senderName: String,
+    val senderRole: UserRole,
+    val senderAvatarUrl: String,
+    val text: String,
+    val imageUrl: String? = null,
+    val documentUrl: String? = null,
+    val voiceNoteUrl: String? = null,
+    val voiceNoteDuration: Int = 0,
+    val reactions: Map<String, List<String>> = emptyMap(), // reaction -> userIds
+    val replyToId: String? = null,
+    val isPinned: Boolean = false,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class DivisionChannel(
+    val id: String,
+    val name: String,
+    val description: String,
+    val division: String,
+    val officialOfficerId: String,
+    val memberCount: Int = 0
+)
+
+data class OfficialAnnouncement(
+    val id: String,
+    val channelId: String,
+    val postedBy: String,
+    val title: String,
+    val content: String,
+    val category: String, // "ROAD_CLOSURES", "WATER_SUPPLY", "REPAIR_UPDATES", "EMERGENCY_ALERTS", "COMMUNITY_NOTICES"
+    val imageUrl: String? = null,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class TaskHistoryItem(
+    val id: String,
+    val issueId: String,
+    val status: String,
+    val assignedTeamId: String,
+    val workersInvolved: List<String>,
+    val beforeImageUrl: String?,
+    val afterImageUrl: String?,
+    val improvementScore: Int,
+    val confidenceScore: Int,
+    val fraudRiskScore: Int,
+    val feedback: String,
+    val completedAt: Long,
+    val closedAt: Long
+)
+
+data class AiTeamRecommendation(
+    val id: String,
+    val issueId: String,
+    val workerId: String,
+    val workerName: String,
+    val trade: String,
+    val distanceKm: Double,
+    val estimatedHours: Int,
+    val reason: String
+)

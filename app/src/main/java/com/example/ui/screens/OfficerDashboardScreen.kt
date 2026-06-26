@@ -1372,6 +1372,7 @@ fun OfficerDashboardScreen(viewModel: CivicViewModel) {
         TaskDetailDialog(
             issue = selectedDetailIssue!!,
             currentUser = currentUser,
+            viewModel = viewModel,
             onDismiss = { selectedDetailIssue = null },
             onAssign = {
                 viewModel.assignIssueToWorker(selectedDetailIssue!!.id)

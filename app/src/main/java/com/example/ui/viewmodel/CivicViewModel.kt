@@ -141,6 +141,37 @@ class CivicViewModel(application: Application) : AndroidViewModel(application) {
     private val _isBriefingLoading = MutableStateFlow<Boolean>(false)
     val isBriefingLoading: StateFlow<Boolean> = _isBriefingLoading.asStateFlow()
 
+    // --- Advanced Workforce & Community Engagement State Flows ---
+    private val _teams = MutableStateFlow<List<CivicTeam>>(emptyList())
+    val teams: StateFlow<List<CivicTeam>> = _teams.asStateFlow()
+
+    private val _teamAssignments = MutableStateFlow<List<TeamAssignment>>(emptyList())
+    val teamAssignments: StateFlow<List<TeamAssignment>> = _teamAssignments.asStateFlow()
+
+    private val _workerAvailability = MutableStateFlow<List<WorkerAvailability>>(emptyList())
+    val workerAvailability: StateFlow<List<WorkerAvailability>> = _workerAvailability.asStateFlow()
+
+    private val _communityGroups = MutableStateFlow<List<CommunityGroup>>(emptyList())
+    val communityGroups: StateFlow<List<CommunityGroup>> = _communityGroups.asStateFlow()
+
+    private val _groupMembers = MutableStateFlow<List<GroupMember>>(emptyList())
+    val groupMembers: StateFlow<List<GroupMember>> = _groupMembers.asStateFlow()
+
+    private val _messages = MutableStateFlow<List<CivicMessage>>(emptyList())
+    val messages: StateFlow<List<CivicMessage>> = _messages.asStateFlow()
+
+    private val _divisionChannels = MutableStateFlow<List<DivisionChannel>>(emptyList())
+    val divisionChannels: StateFlow<List<DivisionChannel>> = _divisionChannels.asStateFlow()
+
+    private val _announcements = MutableStateFlow<List<OfficialAnnouncement>>(emptyList())
+    val announcements: StateFlow<List<OfficialAnnouncement>> = _announcements.asStateFlow()
+
+    private val _taskHistory = MutableStateFlow<List<TaskHistoryItem>>(emptyList())
+    val taskHistory: StateFlow<List<TaskHistoryItem>> = _taskHistory.asStateFlow()
+
+    private val _aiRecommendations = MutableStateFlow<List<AiTeamRecommendation>>(emptyList())
+    val aiRecommendations: StateFlow<List<AiTeamRecommendation>> = _aiRecommendations.asStateFlow()
+
     fun generateDailyBriefing(issuesList: List<InfrastructureIssue>) {
         viewModelScope.launch {
             _isBriefingLoading.value = true
@@ -178,6 +209,7 @@ class CivicViewModel(application: Application) : AndroidViewModel(application) {
             observeUser("citizen1")
             SecurityManager.saveSessionToken(application, "citizen1")
         }
+        initializeMockData()
     }
 
     // --- Authentication Actions ---
@@ -763,5 +795,383 @@ class CivicViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.likePost(postId)
         }
+    }
+
+    // --- Advanced Workforce Engine Methods ---
+    fun recommendTeamForIssue(issue: InfrastructureIssue) {
+        val requiredSkills = when (issue.category) {
+            IssueCategory.WATER, IssueCategory.WATER_LEAKAGE -> listOf("Water Technician", "Road Worker")
+            IssueCategory.ROADS, IssueCategory.POTHOLE, IssueCategory.ROAD_DAMAGE -> listOf("Road Worker")
+            IssueCategory.LIGHTING, IssueCategory.BROKEN_STREETLIGHT -> listOf("Electricity Lineman")
+            IssueCategory.SANITATION, IssueCategory.GARBAGE -> listOf("Sanitation Helper")
+            else -> listOf("Road Worker")
+        }
+
+        val recs = _workerAvailability.value.filter { it.isAvailable && it.trade in requiredSkills }.map { worker ->
+            val latDelta = worker.latitude - issue.latitude
+            val lngDelta = worker.longitude - issue.longitude
+            val distance = Math.sqrt(latDelta * latDelta + lngDelta * lngDelta) * 111.0 // approx km
+            val hours = when (issue.severity) {
+                SeverityLevel.LOW -> 2
+                SeverityLevel.MEDIUM -> 4
+                SeverityLevel.HIGH -> 6
+                SeverityLevel.CRITICAL -> 8
+            }
+            AiTeamRecommendation(
+                id = UUID.randomUUID().toString(),
+                issueId = issue.id,
+                workerId = worker.id,
+                workerName = worker.name,
+                trade = worker.trade,
+                distanceKm = Math.round(distance * 10.0) / 10.0,
+                estimatedHours = hours,
+                reason = "${worker.name} is available nearby (${String.format("%.1f", distance)} km) and is a certified ${worker.trade}."
+            )
+        }
+        _aiRecommendations.value = recs
+    }
+
+    fun approveAssignment(issueId: String, recommendedWorkerIds: List<String>) {
+        viewModelScope.launch {
+            val mainWorkerId = recommendedWorkerIds.firstOrNull() ?: ""
+            updateIssueStatus(issueId, IssueStatus.IN_PROGRESS)
+            
+            val issue = repository.getIssueById(issueId)
+            if (issue != null) {
+                val updated = issue.copy(
+                    status = IssueStatus.IN_PROGRESS,
+                    assignedWorkerId = mainWorkerId,
+                    suggestedPriority = calculateSmartPriority(issue).name
+                )
+                db.issueDao().updateIssue(updated)
+                _selectedIssue.value = updated
+            }
+
+            val teamId = "team_" + UUID.randomUUID().toString().take(6)
+            val confirmations = recommendedWorkerIds.associateWith { false }
+            val newAssignment = TeamAssignment(
+                id = "assign_" + UUID.randomUUID().toString().take(6),
+                issueId = issueId,
+                teamId = teamId,
+                assignedBy = _currentUser.value?.id ?: "officer1",
+                status = "ASSIGNED",
+                assignedAt = System.currentTimeMillis(),
+                estimatedCompletionTime = System.currentTimeMillis() + 4 * 3600 * 1000,
+                workerConfirmations = confirmations
+            )
+            _teamAssignments.value = _teamAssignments.value + newAssignment
+
+            recommendedWorkerIds.forEach { workerId ->
+                val notification = CivicNotification(
+                    id = UUID.randomUUID().toString(),
+                    userId = workerId,
+                    title = "New Team Task Assigned 🛠️",
+                    message = "You have been assigned to task #${issueId.take(5).uppercase()} at ${issue?.locationName ?: "location"}.",
+                    type = "status_change"
+                )
+                db.notificationDao().insertNotification(notification)
+            }
+        }
+    }
+
+    fun calculateSmartPriority(issue: InfrastructureIssue): SeverityLevel {
+        val proximityScore = if (issue.title.lowercase().contains("school") || issue.description.lowercase().contains("hospital")) 15 else 0
+        val baseScore = when (issue.severity) {
+            SeverityLevel.LOW -> 10
+            SeverityLevel.MEDIUM -> 25
+            SeverityLevel.HIGH -> 45
+            SeverityLevel.CRITICAL -> 65
+        }
+        val finalScore = baseScore + issue.verificationsCount * 5 + proximityScore
+        return when {
+            finalScore < 20 -> SeverityLevel.LOW
+            finalScore < 40 -> SeverityLevel.MEDIUM
+            finalScore < 60 -> SeverityLevel.HIGH
+            else -> SeverityLevel.CRITICAL
+        }
+    }
+
+    fun confirmWorkerTask(issueId: String, workerId: String) {
+        val assignmentList = _teamAssignments.value.map { assign ->
+            if (assign.issueId == issueId && assign.workerConfirmations.containsKey(workerId)) {
+                val updatedConfirmations = assign.workerConfirmations.toMutableMap().apply {
+                    put(workerId, true)
+                }
+                val allConfirmed = updatedConfirmations.values.all { it }
+                val newStatus = if (allConfirmed) "AWAITING_VERIFICATION" else "IN_PROGRESS"
+                
+                if (allConfirmed) {
+                    viewModelScope.launch {
+                        val issue = repository.getIssueById(issueId)
+                        if (issue != null) {
+                            val updated = issue.copy(status = IssueStatus.IN_PROGRESS)
+                            db.issueDao().updateIssue(updated)
+                            _selectedIssue.value = updated
+
+                            val notification = CivicNotification(
+                                id = UUID.randomUUID().toString(),
+                                userId = assign.assignedBy,
+                                title = "Team Completed Work 🎉",
+                                message = "All team members confirmed completion for Task #${issueId.take(5).uppercase()}. Pending AI Validation.",
+                                type = "alert"
+                            )
+                            db.notificationDao().insertNotification(notification)
+                        }
+                    }
+                }
+                assign.copy(workerConfirmations = updatedConfirmations, status = newStatus)
+            } else {
+                assign
+            }
+        }
+        _teamAssignments.value = assignmentList
+    }
+
+    fun runGeminiValidation(issueId: String, beforeBitmap: android.graphics.Bitmap, afterBitmap: android.graphics.Bitmap, notes: String) {
+        viewModelScope.launch {
+            _reportState.value = ReportUiState.Submitting
+            try {
+                val result = com.example.data.api.GeminiClient.validateHelperWork(beforeBitmap, afterBitmap)
+                val issue = repository.getIssueById(issueId)
+                if (issue != null) {
+                    val updated = issue.copy(
+                        status = IssueStatus.RESOLVED,
+                        helperBeforeImage = "https://images.unsplash.com/photo-1515162305285-0293e4767cc2",
+                        helperAfterImage = "https://images.unsplash.com/photo-1590674899484-d5640e854abe",
+                        helperImprovementScore = result.improvementScore,
+                        helperConfidenceScore = result.confidenceScore,
+                        helperFraudRiskScore = result.fraudRiskScore,
+                        helperValidationFeedback = result.feedback,
+                        resolvedImage = "https://images.unsplash.com/photo-1590674899484-d5640e854abe",
+                        resolutionNotes = "AI Validated (Improvement: ${result.improvementScore}%): $notes"
+                    )
+                    db.issueDao().updateIssue(updated)
+                    _selectedIssue.value = updated
+
+                    val historyItem = TaskHistoryItem(
+                        id = "hist_" + UUID.randomUUID().toString().take(6),
+                        issueId = issueId,
+                        status = "CLOSED",
+                        assignedTeamId = "team_pb08_roads_01",
+                        workersInvolved = listOf("worker_harpreet_99", "worker_rajesh_45"),
+                        beforeImageUrl = updated.helperBeforeImage,
+                        afterImageUrl = updated.helperAfterImage,
+                        improvementScore = result.improvementScore,
+                        confidenceScore = result.confidenceScore,
+                        fraudRiskScore = result.fraudRiskScore,
+                        feedback = result.feedback ?: "Validation Successful",
+                        completedAt = System.currentTimeMillis(),
+                        closedAt = System.currentTimeMillis()
+                    )
+                    _taskHistory.value = _taskHistory.value + historyItem
+
+                    val officerNotif = CivicNotification(
+                        id = UUID.randomUUID().toString(),
+                        userId = "officer1",
+                        title = "Task #${issueId.take(5).uppercase()} Completed & AI Verified ✅",
+                        message = "Work has been validated by Gemini (Improvement: ${result.improvementScore}%, Fraud Risk: Low).",
+                        type = "alert"
+                    )
+                    db.notificationDao().insertNotification(officerNotif)
+
+                    val reporterNotif = CivicNotification(
+                        id = UUID.randomUUID().toString(),
+                        userId = issue.reporterId,
+                        title = "Your Reported Issue is Resolved! 🛠️",
+                        message = "Your report on '${issue.title}' is now resolved. Thank you for your civic contribution!",
+                        type = "reputation_gain"
+                    )
+                    db.notificationDao().insertNotification(reporterNotif)
+
+                    selectedIssueVotes.value.forEach { vote ->
+                        val verifierNotif = CivicNotification(
+                            id = UUID.randomUUID().toString(),
+                            userId = vote.verifierId,
+                            title = "Issue You Verified Has Been Repaired! 🤝",
+                            message = "The issue '${issue.title}' has been successfully repaired and validated.",
+                            type = "reputation_gain"
+                        )
+                        db.notificationDao().insertNotification(verifierNotif)
+                    }
+
+                    _reportState.value = ReportUiState.Success(updated)
+                }
+            } catch (e: Exception) {
+                _reportState.value = ReportUiState.Error("AI Validation failed: " + e.message)
+            }
+        }
+    }
+
+    // --- Community Hub Messaging ---
+    fun sendCivicMessage(channelOrGroupId: String, text: String, imageUrl: String? = null, voiceNoteUrl: String? = null, voiceNoteDuration: Int = 0) {
+        val user = _currentUser.value ?: return
+        val newMessage = CivicMessage(
+            id = "msg_" + UUID.randomUUID().toString().take(6),
+            channelOrGroupId = channelOrGroupId,
+            senderId = user.id,
+            senderName = user.name,
+            senderRole = user.role,
+            senderAvatarUrl = user.avatarUrl,
+            text = text,
+            imageUrl = imageUrl,
+            voiceNoteUrl = voiceNoteUrl,
+            voiceNoteDuration = voiceNoteDuration,
+            timestamp = System.currentTimeMillis()
+        )
+        _messages.value = _messages.value + newMessage
+    }
+
+    fun addOfficialAnnouncement(channelId: String, title: String, content: String, category: String, imageUrl: String? = null) {
+        val user = _currentUser.value ?: return
+        val newAnnouncement = OfficialAnnouncement(
+            id = "ann_" + UUID.randomUUID().toString().take(6),
+            channelId = channelId,
+            postedBy = user.name,
+            title = title,
+            content = content,
+            category = category,
+            imageUrl = imageUrl,
+            timestamp = System.currentTimeMillis()
+        )
+        _announcements.value = _announcements.value + newAnnouncement
+        
+        val msgText = "📢 OFFICIAL ANNOUNCEMENT: **$title**\n$content"
+        sendCivicMessage(channelId, msgText)
+    }
+
+    fun reactToMessage(messageId: String, reaction: String) {
+        val user = _currentUser.value ?: return
+        val updatedList = _messages.value.map { msg ->
+            if (msg.id == messageId) {
+                val currentReactions = msg.reactions.toMutableMap()
+                val currentUsers = currentReactions[reaction]?.toMutableList() ?: mutableListOf()
+                if (currentUsers.contains(user.id)) {
+                    currentUsers.remove(user.id)
+                } else {
+                    currentUsers.add(user.id)
+                }
+                if (currentUsers.isEmpty()) {
+                    currentReactions.remove(reaction)
+                } else {
+                    currentReactions[reaction] = currentUsers
+                }
+                msg.copy(reactions = currentReactions)
+            } else {
+                msg
+            }
+        }
+        _messages.value = updatedList
+    }
+
+    fun createCommunityGroup(name: String, description: String, category: String, isPublic: Boolean) {
+        val user = _currentUser.value ?: return
+        val groupId = "group_" + UUID.randomUUID().toString().take(6)
+        val newGroup = CommunityGroup(
+            id = groupId,
+            name = name,
+            description = description,
+            category = category,
+            division = "Jalandhar North Division",
+            creatorId = user.id,
+            moderators = listOf(user.id),
+            isPublic = isPublic,
+            inviteCode = if (!isPublic) "INVITE-" + UUID.randomUUID().toString().take(4).uppercase() else null
+        )
+        _communityGroups.value = _communityGroups.value + newGroup
+
+        val newMember = GroupMember(
+            id = "gmember_" + UUID.randomUUID().toString().take(6),
+            groupId = groupId,
+            userId = user.id,
+            role = "OWNER",
+            status = "APPROVED"
+        )
+        _groupMembers.value = _groupMembers.value + newMember
+    }
+
+    private fun initializeMockData() {
+        _workerAvailability.value = listOf(
+            WorkerAvailability("worker_harpreet_99", "Harpreet Singh", "Road Worker", true, 1, 41.3082, -72.9279, "Jalandhar North Division"),
+            WorkerAvailability("worker_rajesh_45", "Rajesh Kumar", "Road Worker", true, 0, 41.3100, -72.9220, "Jalandhar North Division"),
+            WorkerAvailability("worker_amandeep_12", "Amandeep Singh", "Water Technician", true, 0, 41.3050, -72.9320, "Jalandhar North Division"),
+            WorkerAvailability("worker_vikram_21", "Vikram Jeet", "Electricity Lineman", true, 0, 41.3120, -72.9150, "Jalandhar North Division")
+        )
+
+        _divisionChannels.value = listOf(
+            DivisionChannel("chan_jalandhar_north", "Jalandhar North Core", "Official bulletins and central civic channel.", "Jalandhar North Division", "officer1", 1420),
+            DivisionChannel("chan_sector_7", "Sector 7 Public Works", "Discussion and status tracking for Sector 7 resident improvements.", "Jalandhar North Division", "officer1", 850),
+            DivisionChannel("chan_ward_12", "Ward 12 Infrastructure", "Dedicated updates for Ward 12 water and grid maintenance.", "Jalandhar North Division", "officer1", 620)
+        )
+
+        _announcements.value = listOf(
+            OfficialAnnouncement(
+                id = "ann_road_close_sector7",
+                channelId = "chan_sector_7",
+                postedBy = "Director Marcus Vance",
+                title = "Road Closure Alert: Sector 7 Main Boulevard",
+                content = "Sector 7 main link road will remain closed for sewer upgrades from 9:00 AM to 5:00 PM tomorrow. Please use Sector 8 bypass.",
+                category = "ROAD_CLOSURES",
+                imageUrl = "https://images.unsplash.com/photo-1515162305285-0293e4767cc2",
+                timestamp = System.currentTimeMillis() - 3600000 * 2
+            ),
+            OfficialAnnouncement(
+                id = "ann_water_maintenance",
+                channelId = "chan_ward_12",
+                postedBy = "Director Marcus Vance",
+                title = "Water Supply Maintenance Notice",
+                content = "Water pressure will be low on Friday morning (6:00 AM to 10:00 AM) due to valve replacement in Jalandhar North pump-house.",
+                category = "WATER_SUPPLY",
+                timestamp = System.currentTimeMillis() - 3600000 * 5
+            )
+        )
+
+        _communityGroups.value = listOf(
+            CommunityGroup("group_sec7_residents", "Sector 7 Welfare Association", "Residents collaborating for a cleaner, safer Sector 7.", "WELFARE", "Jalandhar North Division", "citizen1"),
+            CommunityGroup("group_jalandhar_green", "Jalandhar Clean & Green Volunteers", "Volunteers planting trees and cleaning local ward parks.", "VOLUNTEER", "Jalandhar North Division", "citizen2")
+        )
+
+        _messages.value = listOf(
+            CivicMessage(
+                id = "msg_init_1",
+                channelOrGroupId = "chan_sector_7",
+                senderId = "officer1",
+                senderName = "Director Marcus Vance",
+                senderRole = UserRole.OFFICER,
+                senderAvatarUrl = "https://images.unsplash.com/photo-1560250097-0b93528c311a",
+                text = "Welcome to Sector 7 Official Public Works Channel. All announcements regarding upcoming road layouts or emergency maintenance will be posted here."
+            ),
+            CivicMessage(
+                id = "msg_init_2",
+                channelOrGroupId = "chan_sector_7",
+                senderId = "citizen1",
+                senderName = "Anil Sharma",
+                senderRole = UserRole.CITIZEN,
+                senderAvatarUrl = "https://images.unsplash.com/photo-1534528741775-53994a69daeb",
+                text = "Thank you Director! Can we also schedule some sidewalk cleaning around Ward 4 park? There is quite a lot of building waste piled up.",
+                timestamp = System.currentTimeMillis() - 1800000
+            ),
+            CivicMessage(
+                id = "msg_init_3",
+                channelOrGroupId = "group_sec7_residents",
+                senderId = "citizen1",
+                senderName = "Anil Sharma",
+                senderRole = UserRole.CITIZEN,
+                senderAvatarUrl = "https://images.unsplash.com/photo-1534528741775-53994a69daeb",
+                text = "Hello neighbors! Let's organize our weekly sanitation drive this Saturday at 10:00 AM. Who is in? Please react with 👍."
+            )
+        )
+
+        _teamAssignments.value = listOf(
+            TeamAssignment(
+                id = "assign_1234",
+                issueId = "pothole1",
+                teamId = "team_pb08_roads_01",
+                assignedBy = "officer1",
+                status = "ASSIGNED",
+                assignedAt = System.currentTimeMillis() - 3600000,
+                estimatedCompletionTime = System.currentTimeMillis() + 10800000,
+                workerConfirmations = mapOf("worker_harpreet_99" to false, "worker_rajesh_45" to false)
+            )
+        )
     }
 }
